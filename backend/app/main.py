@@ -6,6 +6,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from app.schemas.chat import ChatRequest
+from app.schemas.agent import (
+  AgentChatRequest,
+  AgentChatResponse,
+)
+from app.agent.service import run_agent
 from app.services.llm import stream_chat_response
 
 app = FastAPI(
@@ -79,3 +84,12 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
             "X-Content-Type-Options": "nosniff",
         },
     )
+
+@app.post(
+    "/api/agent/chat",
+    response_model=AgentChatResponse,
+)
+async def agent_chat(
+    request: AgentChatRequest,
+) -> AgentChatResponse:
+    return run_agent(request.message)
