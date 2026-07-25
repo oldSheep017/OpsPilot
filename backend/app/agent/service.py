@@ -1,137 +1,107 @@
-import json
 from typing import Any
 
-from openai import OpenAI
+from langchain_core.messages import (
+    AIMessage,
+    HumanMessage,
+    ToolMessage,
+)
 
-from app.config import get_settings
+from app.agent.graph import opspilot_graph
 from app.schemas.agent import (
     AgentChatResponse,
     ToolExecutionRecord,
 )
-from app.services.llm import create_llm_client
-from app.tools.registry import MODEL_TOOLS, execute_tool
 
 
-AGENT_SYSTEM_PROMPT = """
-You are OpsPilot, an AI operations assistant for developers.
-
-You have access to tools that provide project information.
-
-Rules:
-1. Use a tool whenever the user asks about the real or known status of a project.
-2. Never invent a project status, Git branch, repository, process, container, or log.
-3. If a tool reports that a project was not found, clearly tell the user.
-4. For general software questions, answer directly without calling a tool.
-5. Base operational claims only on tool results.
-6. Keep the final answer concise and clearly explain what data was checked.
-7. Reply me in Chinese.
-""".strip()
-
-
-MAX_AGENT_STEPS = 3
-
-
-def serialize_assistant_message(
-    message: Any,
+def find_tool_arguments(
+    messages: list[Any],
+    tool_call_id: str,
 ) -> dict[str, Any]:
-    serialized: dict[str, Any] = {
-        "role": "assistant",
-        "content": message.content,
-    }
+    for message in messages:
+        if not isinstance(message, AIMessage):
+            continue
 
-    if message.tool_calls:
-        serialized["tool_calls"] = [
-            {
-                "id": tool_call.id,
-                "type": tool_call.type,
-                "function": {
-                    "name": tool_call.function.name,
-                    "arguments": tool_call.function.arguments,
-                },
-            }
-            for tool_call in message.tool_calls
-        ]
+        for tool_call in message.tool_calls:
+            if tool_call["id"] == tool_call_id:
+                return tool_call.get("args", {})
 
-    return serialized
+    return {}
 
 
-def run_agent(user_message: str) -> AgentChatResponse:
-    settings = get_settings()
-    client: OpenAI = create_llm_client()
+def collect_tool_executions(
+    messages: list[Any],
+) -> list[ToolExecutionRecord]:
+    records: list[ToolExecutionRecord] = []
 
-    messages: list[dict[str, Any]] = [
-        {
-            "role": "system",
-            "content": AGENT_SYSTEM_PROMPT,
-        },
-        {
-            "role": "user",
-            "content": user_message,
-        },
-    ]
+    for message in messages:
+        if not isinstance(message, ToolMessage):
+            continue
 
-    execution_records: list[ToolExecutionRecord] = []
-
-    for _step in range(MAX_AGENT_STEPS):
-        response = client.chat.completions.create(
-            model=settings.llm_model,
+        arguments = find_tool_arguments(
             messages=messages,
-            tools=MODEL_TOOLS,
-            tool_choice="auto",
+            tool_call_id=message.tool_call_id,
         )
 
-        assistant_message = response.choices[0].message
-        messages.append(
-            serialize_assistant_message(assistant_message)
+        result: dict[str, Any]
+
+        if isinstance(message.content, dict):
+            result = message.content
+        else:
+            result = {
+                "content": message.content,
+            }
+
+        records.append(
+            ToolExecutionRecord(
+                tool_call_id=message.tool_call_id,
+                tool_name=message.name or "unknown_tool",
+                arguments=arguments,
+                result=result,
+            )
         )
 
-        if not assistant_message.tool_calls:
-            return AgentChatResponse(
-                answer=assistant_message.content
-                or "The model returned an empty response.",
-                finish_reason="completed",
-                tool_executions=execution_records,
-            )
+    return records
 
-        for tool_call in assistant_message.tool_calls:
-            tool_name = tool_call.function.name
-            raw_arguments = tool_call.function.arguments
 
-            try:
-                parsed_arguments = json.loads(raw_arguments)
-            except json.JSONDecodeError:
-                parsed_arguments = {}
-
-            result = execute_tool(
-                tool_name=tool_name,
-                raw_arguments=raw_arguments,
-            )
-
-            execution_records.append(
-                ToolExecutionRecord(
-                    tool_call_id=tool_call.id,
-                    tool_name=tool_name,
-                    arguments=parsed_arguments,
-                    result=result,
+async def run_agent(
+    user_message: str,
+) -> AgentChatResponse:
+    result = await opspilot_graph.ainvoke(
+        {
+            "messages": [
+                HumanMessage(
+                    content=user_message,
                 )
-            )
+            ],
+            "llm_calls": 0,
+        }
+    )
 
-            messages.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": tool_call.id,
-                    "content": json.dumps(
-                        result,
-                        ensure_ascii=False,
-                    ),
-                }
-            )
+    messages = result["messages"]
+    last_message = messages[-1]
+
+    if isinstance(last_message, AIMessage):
+        answer = (
+            last_message.content
+            if isinstance(last_message.content, str)
+            else str(last_message.content)
+        )
+    else:
+        answer = "The agent did not return a final response."
+
+    tool_executions = collect_tool_executions(messages)
+
+    reached_limit = (
+        "maximum number of model execution steps"
+        in answer.lower()
+    )
 
     return AgentChatResponse(
-        answer=(
-            "The agent reached the maximum number of execution steps "
-            "before producing a final answer."
+        answer=answer,
+        finish_reason=(
+            "max_steps_reached"
+            if reached_limit
+            else "completed"
         ),
-        finish_reason="max_steps_reached",
-        tool_executions=execution_records,
+        tool_executions=tool_executions,
     )

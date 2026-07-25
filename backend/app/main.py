@@ -92,4 +92,4 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
 async def agent_chat(
     request: AgentChatRequest,
 ) -> AgentChatResponse:
-    return run_agent(request.message)
+    return await run_agent(request.message)
