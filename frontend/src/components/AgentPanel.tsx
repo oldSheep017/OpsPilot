@@ -1,4 +1,4 @@
-import { FormEvent, useState } from "react"
+import { type FormEvent, useState } from "react"
 
 interface ToolExecution {
 	tool_call_id: string

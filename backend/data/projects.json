@@ -1,0 +1,24 @@
+[
+	{
+		"id": "opspilot",
+		"name": "OpsPilot",
+		"aliases": ["OpsPilot Frontend", "运维助手"],
+		"repository": "https://github.com/oldSheep017/OpsPilot",
+		"local_path": "../",
+		"health_url": "http://127.0.0.1:5173",
+		"environment": "development",
+		"status": "running",
+		"enabled": true
+	},
+	{
+		"id": "demo-service",
+		"name": "Demo Service",
+		"aliases": ["demo", "演示服务"],
+		"repository": "https://github.com/oldSheep017/demo-service",
+		"local_path": null,
+		"health_url": null,
+		"environment": "test",
+		"status": "stopped",
+		"enabled": true
+	}
+]

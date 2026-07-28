@@ -1,4 +1,3 @@
-import { ChatPanel } from "./components/ChatPanel"
 import { AgentPanel } from "./components/AgentPanel"
 
 function App() {

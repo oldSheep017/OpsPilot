@@ -1,3 +1,4 @@
+import json
 from typing import Any
 
 from langchain_core.messages import (
@@ -13,19 +14,37 @@ from app.schemas.agent import (
 )
 
 
-def find_tool_arguments(
+def find_tool_call(
     messages: list[Any],
     tool_call_id: str,
-) -> dict[str, Any]:
+) -> dict[str, Any] | None:
     for message in messages:
         if not isinstance(message, AIMessage):
             continue
 
         for tool_call in message.tool_calls:
-            if tool_call["id"] == tool_call_id:
-                return tool_call.get("args", {})
+            if tool_call.get("id") == tool_call_id:
+                return tool_call
 
-    return {}
+    return None
+
+
+def parse_tool_result(content: Any) -> dict[str, Any]:
+    if isinstance(content, dict):
+        return content
+
+    if isinstance(content, str):
+        try:
+            parsed = json.loads(content)
+        except json.JSONDecodeError:
+            return {"content": content}
+
+        return parsed if isinstance(parsed, dict) else {"value": parsed}
+
+    if isinstance(content, list):
+        return {"content": content}
+
+    return {"content": str(content)}
 
 
 def collect_tool_executions(
@@ -37,26 +56,24 @@ def collect_tool_executions(
         if not isinstance(message, ToolMessage):
             continue
 
-        arguments = find_tool_arguments(
+        tool_call = find_tool_call(
             messages=messages,
             tool_call_id=message.tool_call_id,
         )
 
-        result: dict[str, Any]
-
-        if isinstance(message.content, dict):
-            result = message.content
-        else:
-            result = {
-                "content": message.content,
-            }
+        arguments = tool_call.get("args", {}) if tool_call else {}
+        tool_name = (
+            tool_call.get("name", "unknown_tool")
+            if tool_call
+            else message.name or "unknown_tool"
+        )
 
         records.append(
             ToolExecutionRecord(
                 tool_call_id=message.tool_call_id,
-                tool_name=message.name or "unknown_tool",
+                tool_name=tool_name,
                 arguments=arguments,
-                result=result,
+                result=parse_tool_result(message.content),
             )
         )
 
